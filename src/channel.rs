@@ -1,75 +1,75 @@
 extern crate serde_json;
 
-use bytes::{BufMut, BytesMut};
+use encoding::{Encoding, ByteWriter, EncoderTrap};
+use encoding::types::RawEncoder;
+use encoding::all::ASCII;
 use mio::tcp::TcpStream;
 use serde_json::Value;
-use std::cmp::max;
 use std::io;
-use std::io::Read;
+use std::io::{BufRead, Write};
+
+fn hex_escape(_encoder: &mut RawEncoder, input: &str, output: &mut ByteWriter) -> bool {
+    for escape in input.chars().map(|ch| format!("\\u{:04X}", ch as isize)) {
+        output.write_bytes(escape.as_bytes());
+    }
+    true
+}
+
+static HEX_ESCAPE: EncoderTrap = EncoderTrap::Call(hex_escape);
+
 
 pub struct Channel {
-    pub socket: TcpStream,
-    in_buffer: BytesMut,
+    reader: io::BufReader<TcpStream>,
+    writer: TcpStream,
 }
 
 impl Channel {
     pub fn new(socket: TcpStream) -> Channel {
         Channel {
-            socket: socket,
-            in_buffer: BytesMut::with_capacity(2048),
+            reader: io::BufReader::new(socket.try_clone().unwrap()),
+            writer: socket,
         }
     }
+
     pub fn read(self: &mut Channel) -> io::Result<Vec<Value>> {
-        let buffer = &mut self.in_buffer;
+        let mut result: Vec<Value> = Vec::new();
         loop {
-            if buffer.remaining_mut() < 128 {
-                let cap = max(2048, buffer.capacity() * 2) - buffer.len();
-                println!("Capacity down to {}, resizing by {}", buffer.capacity(), cap);
-                buffer.reserve(cap);
-            }
-            match unsafe {
-                self.socket.read(buffer.bytes_mut())
-            } {
-                Ok(0) => {
-                    break;
-                }
-                Ok(count) => unsafe {
-                    buffer.advance_mut(count);
-                }
+            let mut s = String::new();
+            match self.reader.read_line(&mut s) {
+                Ok(_) => {
+                    match serde_json::from_str(&s) {
+                        Ok(r) => {
+                            result.push(r);
+                        },
+                        Err(f) => {
+                            println!("Error parsing json: {}", f.to_string());
+                            break;
+                        },
+                    }
+                },
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     // Socket is not ready anymore, stop reading
                     break;
+                },
+                Err(f) => {
+                    println!("Error reading a line: {}", f.to_string());
+                    break;
                 }
-                e => panic!("err={:?}", e), // Unexpected error
             }
         }
-        if buffer.is_empty() {
+        if result.is_empty() {
             println!("Socket closed!");
             Err(io::Error::new(io::ErrorKind::ConnectionReset, "Socket closed"))
         } else {
-            let mut result: Vec<Value> = Vec::new();
-            let mut total_len = 0;
-            for piece in buffer.split(|b| *b == b'\n') {
-                let new_total = total_len + piece.len() + 1;
-                if new_total > buffer.len() {
-                    break;
-                }
-                if piece.len() == 0 {
-                    continue;
-                }
-                match serde_json::from_slice(piece) {
-                    Ok(r) => {
-                        result.push(r)
-                    },
-                    Err(f) => {
-                        println!("Error parsing json: \"{}\" {}",
-                                 String::from_utf8_lossy(piece), f.to_string())
-                    },
-                }
-                total_len = new_total;
-            }
-            buffer.advance(total_len);
             Ok(result)
         }
+    }
+
+    pub fn write(self: &mut Channel, message: Value) -> io::Result<()> {
+        let msg_str = format!("{}\n", serde_json::to_string(&message)?);
+        let encoded = ASCII.encode(&msg_str, HEX_ESCAPE).expect("encoding to ASCII will not fail");
+        self.writer.write(&encoded)?;
+        self.writer.flush()?;
+        Ok(())
     }
 }

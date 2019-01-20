@@ -1,14 +1,10 @@
-extern crate bytes;
 extern crate encoding;
 extern crate getopts;
 extern crate mio;
 extern crate serde_json;
 extern crate slab;
 
-use encoding::{Encoding, ByteWriter, EncoderTrap};
-use encoding::types::RawEncoder;
-use encoding::all::ASCII;
-use mio::*;
+use mio::{Events, Poll, PollOpt, Ready, Token};
 use mio::tcp::{TcpListener, TcpStream};
 use serde_json::Value;
 use std::io;
@@ -16,15 +12,6 @@ use std::io::Write;
 use std::vec::Vec;
 
 mod channel;
-
-fn hex_escape(_encoder: &mut RawEncoder, input: &str, output: &mut ByteWriter) -> bool {
-    for escape in input.chars().map(|ch| format!("\\u{:04X}", ch as isize)) {
-        output.write_bytes(escape.as_bytes());
-    }
-    true
-}
-
-static HEX_ESCAPE: EncoderTrap = EncoderTrap::Call(hex_escape);
 
 fn serve(router: &str, sock: &str, prefix: &str) -> io::Result<()> {
     let listener = TcpListener::bind(&sock.parse().expect("Wrong format for socket address"))?;
@@ -64,9 +51,7 @@ fn serve(router: &str, sock: &str, prefix: &str) -> io::Result<()> {
                                 let channel = message["to"]["channel"].clone();
                                 let parts: Vec<&str> = channel.as_str().unwrap().splitn(3, ':').collect();
                                 message["to"]["channel"] = Value::String(String::from(parts[2]));
-                                let client = &mut channels[parts[1].parse::<usize>().unwrap()].socket;
-                                serde_json::to_writer(client.try_clone()?, &message)?;
-                                client.write(b"\n")?;
+                                channels[parts[1].parse::<usize>().unwrap()].write(message)?;
                             }
                         }
                         Err(f) => {
@@ -82,9 +67,7 @@ fn serve(router: &str, sock: &str, prefix: &str) -> io::Result<()> {
                             for mut message in messages {
                                 let new_from = format!("{}:{}:{}", prefix, idx, message["from"]["channel"].as_str().unwrap());
                                 message["from"]["channel"] = Value::String(new_from);
-                                let msg_str = format!("{}\n", serde_json::to_string(&message).unwrap());
-                                let encoded = ASCII.encode(&msg_str, HEX_ESCAPE).unwrap();
-                                stream.write(&encoded)?;
+                                channels[0].write(message)?;
                             }
                         }
                         Err(_) => {
