@@ -54,8 +54,17 @@ impl Channel {
                 if new_total > buffer.len() {
                     break;
                 }
-                if piece.len() > 0 {
-                    result.push(serde_json::from_slice(piece).unwrap());
+                if piece.len() == 0 {
+                    continue;
+                }
+                match serde_json::from_slice(piece) {
+                    Ok(r) => {
+                        result.push(r)
+                    },
+                    Err(f) => {
+                        println!("Error parsing json: \"{}\" {}",
+                                 String::from_utf8_lossy(piece), f.to_string())
+                    },
                 }
                 total_len = new_total;
             }
@@ -64,4 +73,3 @@ impl Channel {
         }
     }
 }
-
