@@ -3,6 +3,7 @@ extern crate serde_json;
 use bytes::{BufMut, BytesMut};
 use mio::tcp::TcpStream;
 use serde_json::Value;
+use std::cmp::max;
 use std::io;
 use std::io::Read;
 
@@ -21,6 +22,11 @@ impl Channel {
     pub fn read(self: &mut Channel) -> io::Result<Vec<Value>> {
         let buffer = &mut self.in_buffer;
         loop {
+            if buffer.remaining_mut() < 128 {
+                let cap = max(2048, buffer.capacity() * 2) - buffer.len();
+                println!("Capacity down to {}, resizing by {}", buffer.capacity(), cap);
+                buffer.reserve(cap);
+            }
             match unsafe {
                 self.socket.read(buffer.bytes_mut())
             } {
