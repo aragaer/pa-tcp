@@ -48,7 +48,9 @@ impl Channel {
                 if new_total > buffer.len() {
                     break;
                 }
-                result.push(serde_json::from_slice(piece).unwrap());
+                if piece.len() > 0 {
+                    result.push(serde_json::from_slice(piece).unwrap());
+                }
                 total_len = new_total;
             }
             buffer.advance(total_len);
